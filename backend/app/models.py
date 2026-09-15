@@ -1,14 +1,12 @@
 """What the enrichment agent reports about a practice.
 
-Every fact carries the page it came from and a short verbatim quote so the navigator can judge
-how far to trust it. `None` means "not found", never a guess.
+Each researched fact carries the page it came from and a short verbatim quote, so the navigator
+can judge how far to trust it. `None` means "not found", never a guess.
 """
 
-from typing import Generic, Literal, TypeVar
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-T = TypeVar("T")
 
 
 class StrictModel(BaseModel):
@@ -17,12 +15,15 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Fact(StrictModel, Generic[T]):
-    value: T | None = None
+class Sourced(StrictModel):
     source_url: str | None = None
     quote: str | None = Field(
         default=None, description="Short verbatim quote (under 25 words) supporting the value"
     )
+
+
+class Fact[T](Sourced):
+    value: T | None = None
 
 
 BookingPlatform = Literal[
@@ -40,22 +41,18 @@ BookingPlatform = Literal[
 ]
 
 
-class InsurancePlan(StrictModel):
+class InsurancePlan(Sourced):
     name: str = Field(
         description="Canonical payer name from the list in the instructions when it matches, "
         "otherwise the plan name as written"
     )
-    source_url: str | None = None
-    quote: str | None = None
 
 
-class YearsInBusiness(StrictModel):
+class YearsInBusiness(Sourced):
     since_year: int | None = Field(
         default=None, description="Year the practice (or the lead physician's practice) began"
     )
     basis: Literal["practice_founded", "physician_experience", "npi_enumeration"] | None = None
-    source_url: str | None = None
-    quote: str | None = None
 
 
 class Findings(StrictModel):

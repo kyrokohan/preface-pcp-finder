@@ -6,7 +6,8 @@ A navigator enters a patient's **Los Angeles County ZIP code** and gets a **rank
 - years in business
 - insurance
 - availability
-- details a navigator needs: accepting new patients, languages, telehealth, ages served, and a source for every fact
+- details a navigator needs: accepting new patients, languages, telehealth, ages served
+- a source URL and quote for every researched fact
 
 This is the **MVP**: the thinnest slice that works end to end. See [Roadmap](#roadmap) for what comes next.
 
@@ -17,7 +18,7 @@ React ──POST /api/search {zip, radius, adult|child}──► FastAPI
   │         ├─ Google Geocoding: ZIP → lat/lng (rejects ZIPs outside LA County)
   │         ├─ Google Places Text Search "primary care doctor" | "pediatrician" (nearest 20)
   │         └─ drop closed / out-of-radius / clearly non-medical listings, add distance
-  │   rank.ts: proximity + review-adjusted rating (+ plan / new-patient / language bonuses)
+  │   rank.ts: proximity + review-adjusted rating, adjusted for plan, new-patient status, language
   │
   └─ per card, 4 at a time ──POST /api/enrich (start) · GET /api/enrich/{place_id} (poll)──► FastAPI
             ├─ saved profile for this place (< 7 days)? done immediately
@@ -38,27 +39,29 @@ React ──POST /api/search {zip, radius, adult|child}──► FastAPI
 | Years in business | Claude agent, trying in order: when the practice was founded, the lead physician's years in practice, then the NPI registration date (shown as a minimum) |
 | Primary care or not, practice type, ages served, languages | Claude agent |
 
-Every agent fact carries a **source URL and a verbatim quote**, shown under "Sources" on each card.
+Every researched fact (booking, availability, insurance, years in business, languages) carries a **source URL and a verbatim quote**, shown under "Sources" on each card. The primary-care call, practice type and summary are the agent's judgment over those sources.
 
 ## Key decisions
 
 - **Google Places for discovery.** It's the only source of Google rating and review count, and it returns phone, website, hours and location in one call.
 - **An agent for everything else.** Places has **no booking-link field** (appointment links are only exposed to the business owner) and **no primary-care category**, and insurance and availability aren't in any structured public API. The agent follows what a person would do: read the practice website, follow the appointment, insurance and about pages, then search the web when the site is missing or thin. Using Anthropic's server-side web tools means there's no crawler to maintain in the MVP.
-- **Structured output via a tool.** The agent ends by calling `submit_findings`, whose schema is the Pydantic `Findings` model. Output is validated, and a schema error goes back to the agent so it can fix and resubmit.
+- **Structured output via a tool.** The agent ends by calling `submit_findings`, whose schema is the Pydantic `Findings` model. Output is validated and unknown keys are rejected, and a schema error goes back to the agent so it can fix and resubmit.
 - **Trust signals over false confidence.** Healthcare directory data is often wrong ("ghost networks").
   - Unknown values are `null` and displayed as "unknown / call to verify", never guessed.
-  - Every fact has its source and quote.
+  - Every researched fact has its source and quote.
   - Each card shows when its details were checked.
 - **Centralized provider profile.** Google fields (live) and agent findings (stored, keyed by Google place ID) are combined into one card. The profile store is where future sources plug in: NPI registry, live slots, navigator call notes.
 - **Google's terms.** Only the place ID and our own findings are stored. Google content is re-fetched on each search and labelled as coming from Google.
 - **Ranking lives in the browser (`frontend/src/rank.ts`).** It depends on the navigator's inputs (patient's plan, language) and on details that arrive over time.
   - A Bayesian rating keeps 5.0★ from 3 reviews from beating 4.7★ from 900.
-  - Unknowns add nothing, so missing data is never treated as a "no".
+  - Listing the patient's plan, accepting new patients and speaking their language add to the score; "not accepting new patients" subtracts.
+  - Unknowns change nothing, so missing data is never treated as a "no".
   - Cards don't reshuffle while the navigator reads; a "re-rank" button appears when new details load.
-- **No PHI.** Only ZIP, plan, language and age group leave the navigator's screen.
+- **No PHI.** Only the ZIP, radius and age group are sent to the server. The patient's plan and language never leave the browser, because ranking happens there.
 - **Progressive loading with research jobs.** The list renders immediately, then each card starts a research job and polls for it.
-  - Research can take up to a minute, longer than hosting proxies reliably hold a request open.
+  - Research typically takes 20–30 s (120 s timeout), too long to hold one request open through hosting proxies.
   - Jobs are keyed by place ID, so repeat or concurrent requests for the same practice share one run.
+  - The browser starts at most 4 at a time, so queued cards never cost anything if the navigator moves on to a new search.
   - Job state is in memory, so the MVP runs as **one instance**. Scaling out means a queue and a shared store.
 
 ## Measured performance and cost
@@ -69,7 +72,7 @@ Live runs against real LA practices:
 - **Why Sonnet rather than Opus:** Opus 5 cost about 2–3× as much per practice (~$0.25) for somewhat longer insurance lists. The model is one env var (`CLAUDE_MODEL`).
 - **Why the basic web tools** (measured on Opus 5): Anthropic's newer web tools can "dynamically filter" by having Claude write and run code between fetches. On the same practice that took **259 s** versus **32 s** with the basic tools. It found more insurance plans (16 vs 8), but a navigator can't wait four minutes.
 - **Repeat searches:** saved profiles load instantly and cost about $0.
-- **Cost levers:** profile TTL, tool `max_uses`, enriching only the top N, `CLAUDE_MODEL`.
+- **Cost levers:** profile TTL, tool `max_uses` and `CLAUDE_MODEL` today; researching only the top N results is a future option.
 
 ## Known limitations (MVP)
 
@@ -102,14 +105,19 @@ cd backend && uv sync && uv run uvicorn app.main:app --reload
 cd frontend && npm install && npm run dev
 ```
 
-Tests: `cd backend && uv run pytest` · `cd frontend && npm test`
+Checks:
+
+```bash
+cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest
+cd frontend && npm run lint && npm test && npm run build
+```
 
 ## Deploying (DigitalOcean App Platform)
 
-The root `Dockerfile` builds the React app and serves it from FastAPI on `$PORT` (8080).
+The root `Dockerfile` builds the React app and serves it from FastAPI on port 8080. `.do/app.yaml` describes the app: one instance (research jobs live in memory), the `/api/health` health check, and auto-deploy on push to `main`.
 
-1. Push the repo to GitHub.
-2. In App Platform, create an app from the repo; it detects the Dockerfile. Set the HTTP port to 8080 and the health check to `/api/health`.
-3. Add environment variables (encrypted): `ANTHROPIC_API_KEY`, `GOOGLE_MAPS_API_KEY`, `BASIC_AUTH_USER`, `BASIC_AUTH_PASS`.
+1. Push the repo to GitHub, and update `github.repo` in `.do/app.yaml` if yours differs.
+2. Copy the spec outside the repo and fill in the three secret values (`ANTHROPIC_API_KEY`, `GOOGLE_MAPS_API_KEY`, `BASIC_AUTH_PASS`).
+3. Run `doctl apps create --spec <that copy>`. App Platform stores the secrets encrypted; delete the copy.
 
-Basic auth protects everything except `/api/health` when `BASIC_AUTH_USER` is set.
+Basic auth protects everything except `/api/health`.

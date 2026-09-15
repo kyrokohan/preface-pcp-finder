@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { acceptsPlan, speaksLanguage } from '../rank'
-import type { EnrichState, Fact, Findings, Provider, Sourced, YearsInBusiness } from '../types'
+import type { BookingPlatform, EnrichState, Fact, Findings, Provider, Sourced, YearsInBusiness } from '../types'
 
-const PLATFORM_LABELS: Record<string, string> = {
+// "phone_only" and "other" have no label: they render as "Books by phone" / a plain "Book online".
+const PLATFORM_LABELS: Partial<Record<BookingPlatform, string>> = {
   zocdoc: 'Zocdoc',
   mychart: 'MyChart',
   athenahealth: 'athenahealth',
@@ -32,6 +33,7 @@ interface Props {
 export function ProviderCard({ provider, rank, state, plan, language, onRefresh }: Props) {
   const findings = state?.status === 'done' ? state.data.findings : undefined
   const website = provider.website ?? findings?.website.value ?? null
+  const practiceLine = [findings?.practice_type, findings?.ages_served].filter(Boolean).join(' · ')
 
   return (
     <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -42,11 +44,7 @@ export function ProviderCard({ provider, rank, state, plan, language, onRefresh 
             <h2 className="text-lg font-semibold text-slate-900">{provider.name}</h2>
             {findings?.is_primary_care === false && <Badge tone="amber">Likely not primary care</Badge>}
           </div>
-          {findings?.practice_type && (
-            <p className="text-sm text-slate-500">
-              {[findings.practice_type, findings.ages_served].filter(Boolean).join(' · ')}
-            </p>
-          )}
+          {practiceLine && <p className="text-sm text-slate-500">{practiceLine}</p>}
           <p className="mt-1 text-sm text-slate-700">{provider.address}</p>
           <p className="text-sm text-slate-500">≈ {provider.distance_mi.toFixed(1)} mi from ZIP center</p>
         </div>
@@ -204,7 +202,7 @@ function PracticeDetails({ findings, language }: { findings: Findings; language:
 function YearsInBusinessLine({ years }: { years: YearsInBusiness }) {
   if (!years.since_year) return <p className="text-slate-500">Years in business: unknown</p>
   const count = Math.max(0, new Date().getFullYear() - years.since_year)
-  // NPI numbers were only issued starting 2005-07, so an enumeration date is a lower bound.
+  // NPIs were first issued in 2005, so an enumeration date is a lower bound on years in practice.
   const atLeast = years.basis === 'npi_enumeration' ? '≥ ' : ''
   return (
     <p>

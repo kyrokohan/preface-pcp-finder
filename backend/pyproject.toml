@@ -14,6 +14,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.16.7",
 ]
 
 [tool.uv]
@@ -21,3 +22,13 @@ package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Emitted by Starlette's own TestClient on import; nothing in this repo to fix.
+filterwarnings = ["ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# The agent prompt is written as long lines of prose on purpose.
+ignore = ["E501"]

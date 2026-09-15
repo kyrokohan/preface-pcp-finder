@@ -1,6 +1,7 @@
 import type { AgeGroup, EnrichResult, EnrichStatus, Provider, SearchResponse } from './types'
 
-// Research takes about a minute, so the backend runs it as a job and the browser polls.
+// Research typically takes 20-30 s, too long for one request through hosting proxies, so the
+// backend runs it as a job and the browser polls.
 const POLL_INTERVAL_MS = 3000
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -52,9 +53,8 @@ export async function enrichProvider(
   throw new Error(status.error ?? 'Research was interrupted, please retry')
 }
 
-export async function fetchPayers(): Promise<string[]> {
-  const response = await fetch('/api/payers')
-  return response.ok ? response.json() : []
+export function fetchPayers() {
+  return request<string[]>('/api/payers')
 }
 
 /** Runs `worker` over `items` with at most `limit` in flight at once. */

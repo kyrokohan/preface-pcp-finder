@@ -2,8 +2,8 @@ import type { Findings, Provider } from './types'
 
 // Bayesian average pulls ratings with few reviews toward a prior, so 5.0★ from 3 reviews
 // doesn't outrank 4.7★ from 900.
-export const RATING_PRIOR = 4.0
-export const RATING_PRIOR_WEIGHT = 20
+const RATING_PRIOR = 4.0
+const RATING_PRIOR_WEIGHT = 20
 
 export interface RankContext {
   radiusMi: number
@@ -32,11 +32,12 @@ export function speaksLanguage(findings: Findings, language: string): boolean {
 }
 
 /**
- * Base score is proximity + review-adjusted rating. Once the agent's findings arrive, they add
- * bonuses for what matters to this patient: their plan, new-patient openings, their language.
- * Unknowns add nothing, so missing data is never treated as a "no".
+ * Base score is proximity + review-adjusted rating. Once research arrives, it adjusts for what
+ * matters to this patient: listing their plan matters most (+0.15), then new-patient status
+ * (+0.1, or -0.2 when not accepting, since that usually rules the practice out), with language
+ * as a tie-breaker (+0.05). Unknown facts change nothing, so missing data is never a "no".
  */
-export function scoreProvider(provider: Provider, findings: Findings | undefined, ctx: RankContext): number {
+function scoreProvider(provider: Provider, findings: Findings | undefined, ctx: RankContext): number {
   const proximity = Math.max(0, 1 - provider.distance_mi / ctx.radiusMi)
   let score = 0.5 * proximity + 0.5 * (bayesianRating(provider.rating, provider.review_count) / 5)
   if (!findings) return score

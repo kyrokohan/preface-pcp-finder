@@ -1,4 +1,5 @@
-// Mirrors the backend Pydantic models (backend/app/google.py, backend/app/models.py).
+// Mirrors the backend response models: google.py (Provider), models.py (Findings),
+// main.py (SearchResponse) and enrichment.py (EnrichStatus).
 
 export type AgeGroup = 'adult' | 'child'
 
@@ -6,8 +7,6 @@ export interface Provider {
   place_id: string
   name: string
   address: string
-  lat: number
-  lng: number
   distance_mi: number
   phone: string | null
   website: string | null
@@ -16,7 +15,6 @@ export interface Provider {
   open_now: boolean | null
   hours: string[]
   google_maps_url: string | null
-  primary_type: string | null
   types: string[]
 }
 
@@ -71,8 +69,6 @@ export interface Findings {
 }
 
 export interface SearchResponse {
-  center_lat: number
-  center_lng: number
   providers: Provider[]
 }
 
@@ -90,6 +86,6 @@ export interface EnrichResult {
 }
 
 export type EnrichState =
-  | { status: 'loading' }
+  | { status: 'running' }
   | { status: 'done'; data: EnrichResult }
   | { status: 'error'; message: string }

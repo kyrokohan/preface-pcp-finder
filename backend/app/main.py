@@ -16,6 +16,7 @@ from .enrichment import EnrichmentJobs, EnrichStatus
 from .payers import PAYERS
 from .store import ProfileStore
 
+# INFO so the agent's per-call token usage (i.e. cost) shows up in the server logs.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
@@ -24,15 +25,18 @@ async def lifespan(app: FastAPI):
     http = httpx.AsyncClient(timeout=20)
     claude = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key or None)
     store = ProfileStore(settings.db_path)
-    app.state.http = http
-    app.state.jobs = EnrichmentJobs(
+    jobs = EnrichmentJobs(
         claude,
         store,
         concurrency=settings.enrich_concurrency,
         timeout_s=settings.enrich_timeout_s,
         max_age_s=settings.profile_ttl_days * 86400,
     )
+    app.state.http = http
+    app.state.jobs = jobs
     yield
+    # Stop in-flight research before closing the client and store it depends on.
+    await jobs.aclose()
     await http.aclose()
     await claude.close()
     store.close()
@@ -42,6 +46,9 @@ app = FastAPI(title="PCP Finder", lifespan=lifespan)
 
 
 def _authorized(request: Request) -> bool:
+    if not settings.basic_auth_pass:
+        # A user without a password is a misconfiguration: deny rather than accept "".
+        return False
     scheme, _, encoded = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "basic":
         return False
@@ -56,7 +63,8 @@ def _authorized(request: Request) -> bool:
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
-    # Internal tool backed by paid APIs: protect everything except the platform health check.
+    # Internal tool backed by paid APIs: protect everything (API and the React files) except
+    # the platform health check.
     if settings.basic_auth_user and request.url.path != "/api/health" and not _authorized(request):
         return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="PCP Finder"'})
     return await call_next(request)
@@ -64,13 +72,12 @@ async def basic_auth(request: Request, call_next):
 
 class SearchRequest(BaseModel):
     zip: str = Field(pattern=r"^\d{5}$")
+    # Stays under the Places API's 50 km limit for a location bias.
     radius_mi: float = Field(default=5, gt=0, le=25)
     age_group: Literal["adult", "child"] = "adult"
 
 
 class SearchResponse(BaseModel):
-    center_lat: float
-    center_lng: float
     providers: list[google.Provider]
 
 
@@ -81,12 +88,12 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse:
         lat, lng = await google.geocode_zip(http, body.zip)
         providers = await google.search_providers(http, lat, lng, body.radius_mi, body.age_group)
     except google.ZipNotFound:
-        raise HTTPException(404, f"ZIP {body.zip} was not found")
+        raise HTTPException(404, f"ZIP {body.zip} was not found") from None
     except google.OutsideServiceArea:
-        raise HTTPException(422, f"ZIP {body.zip} is outside Los Angeles County")
+        raise HTTPException(422, f"ZIP {body.zip} is outside Los Angeles County") from None
     except (google.GoogleApiError, httpx.HTTPError) as exc:
-        raise HTTPException(502, str(exc))
-    return SearchResponse(center_lat=lat, center_lng=lng, providers=providers)
+        raise HTTPException(502, str(exc)) from exc
+    return SearchResponse(providers=providers)
 
 
 @app.post("/api/enrich")

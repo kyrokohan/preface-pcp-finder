@@ -11,8 +11,6 @@ function makeProvider(overrides: Partial<Provider>): Provider {
     place_id: 'id',
     name: 'Practice',
     address: '',
-    lat: 0,
-    lng: 0,
     distance_mi: 1,
     phone: null,
     website: null,
@@ -21,7 +19,6 @@ function makeProvider(overrides: Partial<Provider>): Provider {
     open_now: null,
     hours: [],
     google_maps_url: null,
-    primary_type: 'doctor',
     types: [],
     ...overrides,
   }
@@ -70,6 +67,23 @@ describe('rankProviders', () => {
       b: makeFindings({ insurance_plans: [{ name: 'L.A. Care', source_url: null, quote: null }] }),
     }
     expect(rankProviders([a, b], findings, { ...ctx, plan: 'L.A. Care' }).ranked).toEqual(['b', 'a'])
+  })
+
+  it('penalizes "not accepting new patients" but not an unknown status', () => {
+    // The unknown-status practice is slightly closer, so it only stays ahead of the practice
+    // without any findings if an unknown status costs nothing.
+    const unknownStatus = makeProvider({ place_id: 'unknown', distance_mi: 1 })
+    const noFindings = makeProvider({ place_id: 'no-findings', distance_mi: 1.1 })
+    const notAccepting = makeProvider({ place_id: 'not-accepting', distance_mi: 0.5 })
+    const findings = {
+      unknown: makeFindings(),
+      'not-accepting': makeFindings({ accepting_new_patients: { value: false, source_url: null, quote: null } }),
+    }
+    expect(rankProviders([notAccepting, noFindings, unknownStatus], findings, ctx).ranked).toEqual([
+      'unknown',
+      'no-findings',
+      'not-accepting',
+    ])
   })
 
   it('separates practices the agent identified as not primary care', () => {

@@ -13,7 +13,7 @@ from pathlib import Path
 class ProfileStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn = sqlite3.connect(path)
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS profiles ("
             " place_id TEXT PRIMARY KEY,"
@@ -30,16 +30,14 @@ class ProfileStore:
             return None
         return json.loads(row[0]), row[1]
 
-    def put(self, place_id: str, findings: dict) -> float:
-        updated_at = time.time()
+    def put(self, place_id: str, findings: dict) -> None:
         self._conn.execute(
             "INSERT INTO profiles (place_id, findings_json, updated_at) VALUES (?, ?, ?)"
             " ON CONFLICT(place_id) DO UPDATE SET"
             " findings_json = excluded.findings_json, updated_at = excluded.updated_at",
-            (place_id, json.dumps(findings), updated_at),
+            (place_id, json.dumps(findings), time.time()),
         )
         self._conn.commit()
-        return updated_at
 
     def close(self) -> None:
         self._conn.close()

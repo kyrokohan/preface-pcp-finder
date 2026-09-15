@@ -5,6 +5,8 @@ import { type RankContext, type Ranking, rankProviders } from './rank'
 import type { AgeGroup, EnrichState, Findings, Provider } from './types'
 
 const RADII_MI = [2, 5, 10, 15]
+// Payers come from the backend because the agent normalizes plan names to that exact list.
+// Languages are only matched loosely here in the browser, so the list can live locally.
 const LANGUAGES = [
   'Spanish',
   'Korean',
@@ -19,7 +21,9 @@ const LANGUAGES = [
   'Arabic',
   'Hindi',
 ]
-// Enrichment calls run the Claude agent (~1 min each); cap how many run at once.
+// Research starts for at most this many cards at once. Cards still queued never start when the
+// navigator runs a new search, so abandoned results don't cost Claude calls. The backend has its
+// own limit across all navigators.
 const ENRICH_CONCURRENCY = 4
 
 const EMPTY_RANKING: Ranking = { ranked: [], notPrimaryCare: [] }
@@ -48,7 +52,8 @@ export default function App() {
   const searchGeneration = useRef(0)
 
   useEffect(() => {
-    fetchPayers().then(setPayers, () => setPayers([]))
+    // The plan filter is optional: if payers fail to load, the dropdown only offers "Any".
+    fetchPayers().then(setPayers, () => {})
   }, [])
 
   const providerById = useMemo(() => new Map(providers.map((p) => [p.place_id, p])), [providers])
@@ -59,7 +64,7 @@ export default function App() {
     }
     return result
   }, [enrichById])
-  const researchedCount = Object.values(enrichById).filter((s) => s.status !== 'loading').length
+  const loadedCount = Object.values(enrichById).filter((s) => s.status === 'done').length
 
   function rerank(overrides: Partial<RankContext> = {}) {
     setRanking(rankProviders(providers, findingsById, { radiusMi: searchedRadiusMi, plan, language, ...overrides }))
@@ -69,7 +74,7 @@ export default function App() {
   async function enrichOne(provider: Provider, generation: number, refresh = false) {
     const isStale = () => generation !== searchGeneration.current
     if (isStale()) return
-    setEnrichById((prev) => ({ ...prev, [provider.place_id]: { status: 'loading' } }))
+    setEnrichById((prev) => ({ ...prev, [provider.place_id]: { status: 'running' } }))
     try {
       const data = await enrichProvider(provider, { refresh, isCancelled: isStale })
       if (!data || isStale()) return
@@ -224,7 +229,7 @@ export default function App() {
         {providers.length > 0 && (
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
             <span>
-              {ranking.ranked.length} providers · details researched for {researchedCount} of {providers.length}
+              {ranking.ranked.length} providers · details loaded for {loadedCount} of {providers.length}
             </span>
             {rankingStale && (
               <button

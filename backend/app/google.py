@@ -54,7 +54,6 @@ NON_PCP_TYPES = {
 }
 
 METERS_PER_MILE = 1609.344
-MAX_BIAS_RADIUS_M = 50_000
 SERVICE_AREA_COUNTY = "Los Angeles County"
 
 
@@ -74,8 +73,6 @@ class Provider(BaseModel):
     place_id: str
     name: str
     address: str
-    lat: float
-    lng: float
     distance_mi: float
     phone: str | None
     website: str | None
@@ -84,7 +81,6 @@ class Provider(BaseModel):
     open_now: bool | None
     hours: list[str]
     google_maps_url: str | None
-    primary_type: str | None
     types: list[str]
 
 
@@ -115,7 +111,10 @@ async def geocode_zip(http: httpx.AsyncClient, zip_code: str) -> tuple[float, fl
         GEOCODE_URL,
         params={"components": f"postal_code:{zip_code}|country:US", "key": _require_key()},
     )
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        raise GoogleApiError(f"Geocoding failed: HTTP {response.status_code}") from None
     status = data.get("status")
     if status == "ZERO_RESULTS":
         raise ZipNotFound(zip_code)
@@ -142,6 +141,8 @@ async def search_providers(
     radius_mi: float,
     age_group: Literal["adult", "child"],
 ) -> list[Provider]:
+    # Nearest matches first. A location bias isn't a boundary (and a location restriction only
+    # accepts rectangles), so results are filtered to the radius below.
     body = {
         "textQuery": QUERIES[age_group],
         "pageSize": 20,
@@ -149,7 +150,7 @@ async def search_providers(
         "locationBias": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
-                "radius": min(radius_mi * METERS_PER_MILE, MAX_BIAS_RADIUS_M),
+                "radius": radius_mi * METERS_PER_MILE,
             }
         },
     }
@@ -159,7 +160,10 @@ async def search_providers(
         headers={"X-Goog-Api-Key": _require_key(), "X-Goog-FieldMask": FIELD_MASK},
     )
     if response.status_code != 200:
-        message = response.json().get("error", {}).get("message", response.text)
+        try:
+            message = response.json()["error"]["message"]
+        except (ValueError, KeyError):
+            message = response.text
         raise GoogleApiError(f"Places search failed: {message}")
 
     providers = []
@@ -179,8 +183,6 @@ async def search_providers(
                 place_id=place["id"],
                 name=place["displayName"]["text"],
                 address=place["formattedAddress"],
-                lat=location["latitude"],
-                lng=location["longitude"],
                 distance_mi=round(distance, 2),
                 phone=place.get("nationalPhoneNumber"),
                 website=place.get("websiteUri"),
@@ -189,7 +191,6 @@ async def search_providers(
                 open_now=hours.get("openNow"),
                 hours=hours.get("weekdayDescriptions", []),
                 google_maps_url=place.get("googleMapsUri"),
-                primary_type=place.get("primaryType"),
                 types=types,
             )
         )
