@@ -1,0 +1,30 @@
+# DigitalOcean App Platform spec. Secret values are set in the DO dashboard (or at `doctl apps
+# create` time) and never committed.
+name: preface-pcp-finder
+region: sfo
+services:
+  - name: web
+    github:
+      repo: kyrokohan/preface-pcp-finder
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    # Research job state lives in memory, so the MVP runs exactly one instance.
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /api/health
+    envs:
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: GOOGLE_MAPS_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: BASIC_AUTH_USER
+        scope: RUN_TIME
+        value: navigator
+      - key: BASIC_AUTH_PASS
+        scope: RUN_TIME
+        type: SECRET
