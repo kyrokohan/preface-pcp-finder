@@ -28,11 +28,11 @@ def test_repeated_requests_share_one_research_run(tmp_path, monkeypatch):
 
     async def scenario():
         jobs = make_jobs(ProfileStore(tmp_path / "profiles.db"))
-        assert jobs.start(PRACTICE, refresh=False).status == "running"
-        assert jobs.start(PRACTICE, refresh=False).status == "running"
+        assert jobs.start(PRACTICE).status == "running"
+        assert jobs.start(PRACTICE).status == "running"
         await finish_running(jobs)
         # Once saved, the profile is served without starting new research.
-        return jobs.status(PRACTICE.place_id), jobs.start(PRACTICE, refresh=False)
+        return jobs.status(PRACTICE.place_id), jobs.start(PRACTICE)
 
     after_run, later_request = asyncio.run(scenario())
     assert calls == 1
@@ -40,7 +40,7 @@ def test_repeated_requests_share_one_research_run(tmp_path, monkeypatch):
     assert later_request.status == "done"
 
 
-def test_failures_are_reported_and_retry_starts_a_new_run(tmp_path, monkeypatch):
+def test_failures_are_reported_and_starting_again_retries(tmp_path, monkeypatch):
     async def failing_enrich(client, practice):
         raise agent.EnrichmentError("The agent finished without submitting findings")
 
@@ -50,12 +50,12 @@ def test_failures_are_reported_and_retry_starts_a_new_run(tmp_path, monkeypatch)
     async def scenario():
         jobs = make_jobs(ProfileStore(tmp_path / "profiles.db"))
         monkeypatch.setattr(agent, "enrich", failing_enrich)
-        jobs.start(PRACTICE, refresh=False)
+        jobs.start(PRACTICE)
         await finish_running(jobs)
         failed = jobs.status(PRACTICE.place_id)
 
         monkeypatch.setattr(agent, "enrich", working_enrich)
-        jobs.start(PRACTICE, refresh=True)
+        assert jobs.start(PRACTICE).status == "running"
         await finish_running(jobs)
         return failed, jobs.status(PRACTICE.place_id)
 
@@ -76,7 +76,7 @@ def test_profile_saved_under_an_older_schema_is_researched_again(tmp_path, monke
         store = ProfileStore(tmp_path / "profiles.db")
         store.put(PRACTICE.place_id, {"retired_field": "no longer in Findings"})
         jobs = make_jobs(store)
-        first = jobs.start(PRACTICE, refresh=False)
+        first = jobs.start(PRACTICE)
         await finish_running(jobs)
         return first, jobs.status(PRACTICE.place_id)
 

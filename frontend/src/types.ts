@@ -1,5 +1,6 @@
-// Mirrors the backend response models: google.py (Provider), models.py (Findings),
-// main.py (SearchResponse) and enrichment.py (EnrichStatus).
+// The parts of the backend response models the UI uses: google.py (Provider), models.py
+// (Findings), main.py (SearchResponse) and enrichment.py (EnrichStatus). The backend also stores
+// a source URL and quote for each fact, which the UI doesn't show.
 
 export type AgeGroup = 'adult' | 'child'
 
@@ -18,33 +19,15 @@ export interface Provider {
   types: string[]
 }
 
-export interface Sourced {
-  source_url: string | null
-  quote: string | null
-}
-
-export interface Fact<T> extends Sourced {
+export interface Fact<T> {
   value: T | null
 }
 
-export type BookingPlatform =
-  | 'zocdoc'
-  | 'mychart'
-  | 'athenahealth'
-  | 'healow'
-  | 'nexhealth'
-  | 'solv'
-  | 'onemedical'
-  | 'kaiser'
-  | 'practice_website_form'
-  | 'phone_only'
-  | 'other'
-
-export interface InsurancePlan extends Sourced {
+export interface InsurancePlan {
   name: string
 }
 
-export interface YearsInBusiness extends Sourced {
+export interface YearsInBusiness {
   since_year: number | null
   basis: 'practice_founded' | 'physician_experience' | 'npi_enumeration' | null
 }
@@ -55,7 +38,6 @@ export interface Findings {
   ages_served: string | null
   website: Fact<string>
   booking_url: Fact<string>
-  booking_platform: BookingPlatform | null
   next_available: Fact<string>
   same_day_or_walk_in: Fact<boolean>
   availability_notes: Fact<string>
@@ -76,16 +58,10 @@ export interface EnrichStatus {
   place_id: string
   status: 'running' | 'done' | 'error' | 'not_started'
   findings: Findings | null
-  as_of: number | null
   error: string | null
-}
-
-export interface EnrichResult {
-  findings: Findings
-  as_of: number
 }
 
 export type EnrichState =
   | { status: 'running' }
-  | { status: 'done'; data: EnrichResult }
+  | { status: 'done'; findings: Findings }
   | { status: 'error'; message: string }

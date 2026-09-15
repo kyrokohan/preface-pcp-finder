@@ -97,11 +97,9 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse:
 
 
 @app.post("/api/enrich")
-async def start_enrichment(
-    body: agent.PracticeInput, request: Request, refresh: bool = False
-) -> EnrichStatus:
+async def start_enrichment(body: agent.PracticeInput, request: Request) -> EnrichStatus:
     """Starts research for a practice (unless a fresh profile exists or it's already running)."""
-    return request.app.state.jobs.start(body, refresh)
+    return request.app.state.jobs.start(body)
 
 
 @app.get("/api/enrich/{place_id}")

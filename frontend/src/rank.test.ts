@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bayesianRating, rankProviders } from './rank'
-import type { Fact, Findings, Provider } from './types'
-
-function unknown<T>(): Fact<T> {
-  return { value: null, source_url: null, quote: null }
-}
+import type { Findings, Provider } from './types'
 
 function makeProvider(overrides: Partial<Provider>): Provider {
   return {
@@ -29,24 +25,23 @@ function makeFindings(overrides: Partial<Findings> = {}): Findings {
     is_primary_care: true,
     practice_type: null,
     ages_served: null,
-    website: unknown(),
-    booking_url: unknown(),
-    booking_platform: null,
-    next_available: unknown(),
-    same_day_or_walk_in: unknown(),
-    availability_notes: unknown(),
-    accepting_new_patients: unknown(),
-    telehealth: unknown(),
-    languages: unknown(),
+    website: { value: null },
+    booking_url: { value: null },
+    next_available: { value: null },
+    same_day_or_walk_in: { value: null },
+    availability_notes: { value: null },
+    accepting_new_patients: { value: null },
+    telehealth: { value: null },
+    languages: { value: null },
     insurance_plans: [],
-    insurance_notes: unknown(),
-    years_in_business: { since_year: null, basis: null, source_url: null, quote: null },
+    insurance_notes: { value: null },
+    years_in_business: { since_year: null, basis: null },
     summary: null,
     ...overrides,
   }
 }
 
-const ctx = { radiusMi: 5, plan: '', language: '' }
+const ctx = { radiusMi: 5, plan: '' }
 
 describe('rankProviders', () => {
   it('does not let a handful of perfect reviews beat many strong ones', () => {
@@ -64,7 +59,7 @@ describe('rankProviders', () => {
     const b = makeProvider({ place_id: 'b', distance_mi: 1.5 })
     const findings = {
       a: makeFindings(),
-      b: makeFindings({ insurance_plans: [{ name: 'L.A. Care', source_url: null, quote: null }] }),
+      b: makeFindings({ insurance_plans: [{ name: 'L.A. Care' }] }),
     }
     expect(rankProviders([a, b], findings, { ...ctx, plan: 'L.A. Care' }).ranked).toEqual(['b', 'a'])
   })
@@ -77,7 +72,7 @@ describe('rankProviders', () => {
     const notAccepting = makeProvider({ place_id: 'not-accepting', distance_mi: 0.5 })
     const findings = {
       unknown: makeFindings(),
-      'not-accepting': makeFindings({ accepting_new_patients: { value: false, source_url: null, quote: null } }),
+      'not-accepting': makeFindings({ accepting_new_patients: { value: false } }),
     }
     expect(rankProviders([notAccepting, noFindings, unknownStatus], findings, ctx).ranked).toEqual([
       'unknown',

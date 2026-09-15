@@ -8,7 +8,6 @@ const RATING_PRIOR_WEIGHT = 20
 export interface RankContext {
   radiusMi: number
   plan: string
-  language: string
 }
 
 export interface Ranking {
@@ -26,16 +25,11 @@ export function acceptsPlan(findings: Findings, plan: string): boolean {
   return findings.insurance_plans.some((p) => p.name.toLowerCase() === wanted)
 }
 
-export function speaksLanguage(findings: Findings, language: string): boolean {
-  const wanted = language.toLowerCase()
-  return (findings.languages.value ?? []).some((l) => l.toLowerCase().includes(wanted))
-}
-
 /**
  * Base score is proximity + review-adjusted rating. Once research arrives, it adjusts for what
- * matters to this patient: listing their plan matters most (+0.15), then new-patient status
- * (+0.1, or -0.2 when not accepting, since that usually rules the practice out), with language
- * as a tie-breaker (+0.05). Unknown facts change nothing, so missing data is never a "no".
+ * matters to this patient: listing their plan (+0.15) and accepting new patients (+0.1), or not
+ * accepting them (-0.2, since that usually rules the practice out). Unknown facts change nothing,
+ * so missing data is never treated as a "no".
  */
 function scoreProvider(provider: Provider, findings: Findings | undefined, ctx: RankContext): number {
   const proximity = Math.max(0, 1 - provider.distance_mi / ctx.radiusMi)
@@ -44,7 +38,6 @@ function scoreProvider(provider: Provider, findings: Findings | undefined, ctx: 
   if (ctx.plan && acceptsPlan(findings, ctx.plan)) score += 0.15
   if (findings.accepting_new_patients.value === true) score += 0.1
   if (findings.accepting_new_patients.value === false) score -= 0.2
-  if (ctx.language && speaksLanguage(findings, ctx.language)) score += 0.05
   return score
 }
 

@@ -1,13 +1,12 @@
 # PCP Finder: patient navigator tool
 
 A navigator enters a patient's **Los Angeles County ZIP code** and gets a **ranked list of nearby primary care providers**. Each provider shows:
-- name, address, distance, phone, website
+- name, address, phone, website, booking link
 - Google rating and review count
-- years in business
-- insurance
-- availability
-- details a navigator needs: accepting new patients, languages, telehealth, ages served
-- a source URL and quote for every researched fact
+- years in practice
+- insurance, with a match for the patient's plan
+- availability: open today, accepting new patients, next available, walk-ins, telehealth
+- languages and a short summary
 
 This is the **MVP**: the thinnest slice that works end to end. See [Roadmap](#roadmap) for what comes next.
 
@@ -18,7 +17,7 @@ React ──POST /api/search {zip, radius, adult|child}──► FastAPI
   │         ├─ Google Geocoding: ZIP → lat/lng (rejects ZIPs outside LA County)
   │         ├─ Google Places Text Search "primary care doctor" | "pediatrician" (nearest 20)
   │         └─ drop closed / out-of-radius / clearly non-medical listings, add distance
-  │   rank.ts: proximity + review-adjusted rating, adjusted for plan, new-patient status, language
+  │   rank.ts: proximity + review-adjusted rating, adjusted for plan match and new-patient status
   │
   └─ per card, 4 at a time ──POST /api/enrich (start) · GET /api/enrich/{place_id} (poll)──► FastAPI
             ├─ saved profile for this place (< 7 days)? done immediately
@@ -32,34 +31,34 @@ React ──POST /api/search {zip, radius, adult|child}──► FastAPI
 
 | Field | Source |
 |---|---|
-| Name, address, phone, website, rating, review count, office hours, open now | Google Places, fetched live on every search |
-| Distance | Haversine from the ZIP's center |
-| Booking link and platform, next available, same-day or walk-in, accepting new patients, telehealth | Claude agent: practice website, then web search and directories |
+| Name, address, phone, website, rating, review count, today's hours, open now | Google Places, fetched live on every search |
+| Distance (used for ranking, not shown) | Haversine from the ZIP's center |
+| Booking link, next available, same-day or walk-in, accepting new patients, telehealth | Claude agent: practice website, then web search and directories |
 | Insurance plans (normalized to a standard LA plan list) and caveats | Claude agent |
-| Years in business | Claude agent, trying in order: when the practice was founded, the lead physician's years in practice, then the NPI registration date (shown as a minimum) |
-| Primary care or not, practice type, ages served, languages | Claude agent |
+| Years in practice | Claude agent, trying in order: when the practice was founded, the lead physician's years in practice, then the NPI registration date (shown as "at least") |
+| Primary care or not, practice type, ages served, languages, summary | Claude agent |
 
-Every researched fact (booking, availability, insurance, years in business, languages) carries a **source URL and a verbatim quote**, shown under "Sources" on each card. The primary-care call, practice type and summary are the agent's judgment over those sources.
+Every researched fact is stored with a **source URL and a verbatim quote**. The UI doesn't show them. Requiring them keeps the agent grounded in what it actually read, and they stay in the profile for audits.
 
 ## Key decisions
 
 - **Google Places for discovery.** It's the only source of Google rating and review count, and it returns phone, website, hours and location in one call.
 - **An agent for everything else.** Places has **no booking-link field** (appointment links are only exposed to the business owner) and **no primary-care category**, and insurance and availability aren't in any structured public API. The agent follows what a person would do: read the practice website, follow the appointment, insurance and about pages, then search the web when the site is missing or thin. Using Anthropic's server-side web tools means there's no crawler to maintain in the MVP.
 - **Structured output via a tool.** The agent ends by calling `submit_findings`, whose schema is the Pydantic `Findings` model. Output is validated and unknown keys are rejected, and a schema error goes back to the agent so it can fix and resubmit.
-- **Trust signals over false confidence.** Healthcare directory data is often wrong ("ghost networks").
-  - Unknown values are `null` and displayed as "unknown / call to verify", never guessed.
-  - Every researched fact has its source and quote.
-  - Each card shows when its details were checked.
+- **Trust over false confidence.** Healthcare directory data is often wrong ("ghost networks").
+  - Unknown values are `null` and shown as "unknown" or "call to verify", never guessed.
+  - Every researched fact is stored with its source and quote.
+- **Minimal UI.** Cards show only what a navigator acts on: book or call, today's hours, new-patient status, the plan match, insurance, years in practice and languages. How the information was gathered stays out of the way.
 - **Centralized provider profile.** Google fields (live) and agent findings (stored, keyed by Google place ID) are combined into one card. The profile store is where future sources plug in: NPI registry, live slots, navigator call notes.
-- **Google's terms.** Only the place ID and our own findings are stored. Google content is re-fetched on each search and labelled as coming from Google.
-- **Ranking lives in the browser (`frontend/src/rank.ts`).** It depends on the navigator's inputs (patient's plan, language) and on details that arrive over time.
+- **Google's terms.** Only the place ID and our own findings are stored. Google content is re-fetched on each search, and the results list credits Google Maps.
+- **Ranking lives in the browser (`frontend/src/rank.ts`).** It depends on the navigator's plan choice and on details that arrive over time.
   - A Bayesian rating keeps 5.0★ from 3 reviews from beating 4.7★ from 900.
-  - Listing the patient's plan, accepting new patients and speaking their language add to the score; "not accepting new patients" subtracts.
+  - Listing the patient's plan and accepting new patients add to the score; "not accepting new patients" subtracts.
   - Unknowns change nothing, so missing data is never treated as a "no".
-  - Cards don't reshuffle while the navigator reads; a "re-rank" button appears when new details load.
-- **No PHI.** Only the ZIP, radius and age group are sent to the server. The patient's plan and language never leave the browser, because ranking happens there.
+  - The list re-ranks by itself as details arrive. Cards glide to their new position (View Transitions API) instead of jumping, and motion is skipped for users who prefer reduced motion.
+- **No PHI.** Only the ZIP, radius and age group are sent to the server. The patient's plan never leaves the browser, because ranking happens there.
 - **Progressive loading with research jobs.** The list renders immediately, then each card starts a research job and polls for it.
-  - Research typically takes 20–30 s (120 s timeout), too long to hold one request open through hosting proxies.
+  - Research typically takes 20–50 s (120 s timeout), too long to hold one request open through hosting proxies.
   - Jobs are keyed by place ID, so repeat or concurrent requests for the same practice share one run.
   - The browser starts at most 4 at a time, so queued cards never cost anything if the navigator moves on to a new search.
   - Job state is in memory, so the MVP runs as **one instance**. Scaling out means a queue and a shared store.
@@ -68,7 +67,7 @@ Every researched fact (booking, availability, insurance, years in business, lang
 
 Live runs against real LA practices:
 - **Per search:** Google Geocoding + Places, about $0.04, in about 1–2 s.
-- **Enrichment (`claude-sonnet-5`, effort `medium`):** 21–27 s and about $0.08–0.16 per practice in live runs (tokens plus 1–2 web searches at $10/1K). A cold 20-provider search is about $2–3.
+- **Enrichment (`claude-sonnet-5`, effort `medium`):** 21–47 s and about $0.08–0.16 per practice in live runs (tokens plus 1–2 web searches at $10/1K). A cold 20-provider search is about $2–3.
 - **Why Sonnet rather than Opus:** Opus 5 cost about 2–3× as much per practice (~$0.25) for somewhat longer insurance lists. The model is one env var (`CLAUDE_MODEL`).
 - **Why the basic web tools** (measured on Opus 5): Anthropic's newer web tools can "dynamically filter" by having Claude write and run code between fetches. On the same practice that took **259 s** versus **32 s** with the basic tools. It found more insurance plans (16 vs 8), but a navigator can't wait four minutes.
 - **Repeat searches:** saved profiles load instantly and cost about $0.
@@ -76,12 +75,12 @@ Live runs against real LA practices:
 
 ## Known limitations (MVP)
 
-- **Live appointment slots aren't extracted yet.** Booking widgets (Epic MyChart, athena, healow…) only render slots with JavaScript, and `web_fetch` doesn't execute JS. The MVP shows office hours, the booking link and platform, and any published availability.
+- **Live appointment slots aren't extracted yet.** Booking widgets (Epic MyChart, athena, healow…) only render slots with JavaScript, and `web_fetch` doesn't execute JS. The MVP shows today's hours, the booking link and any published availability.
 - **Results are the nearest 20 Google matches** for the query (no pagination).
 - **Distance is measured from the ZIP center**, not the patient's address.
 - **Google often lists a group practice and its individual doctors separately,** so duplicates can appear.
 - **Quotes aren't machine-verified** against the page yet.
-- **SQLite on App Platform is ephemeral,** which is fine for a cache but not for durable navigator data.
+- **SQLite on App Platform is ephemeral** (cleared on each deploy), which is fine for a cache but not for durable navigator data.
 
 ## Roadmap
 

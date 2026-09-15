@@ -23,3 +23,10 @@ def test_partial_submission_leaves_unknown_facts_null():
     assert findings.languages.value == ["Spanish"]
     assert findings.booking_url.value is None
     assert findings.insurance_plans == []
+
+
+def test_sourced_models_list_the_value_before_its_evidence():
+    # The agent reads this schema; with the evidence fields first it misplaced "value" (models.py).
+    definitions = Findings.model_json_schema()["$defs"]
+    for name in ("Fact_str_", "Fact_bool_", "InsurancePlan", "YearsInBusiness"):
+        assert list(definitions[name]["properties"])[-2:] == ["source_url", "quote"], name

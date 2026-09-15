@@ -1,1 +1,16 @@
 @import "tailwindcss";
+
+@theme {
+  --color-navy: #0a2540;
+  --color-sky: #ebf4fa;
+  --color-coral: #ff6b6b;
+}
+
+/* Cards animate to their new rank with view transitions; skip that for reduced-motion users. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}

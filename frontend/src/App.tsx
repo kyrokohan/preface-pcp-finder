@@ -1,35 +1,30 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { enrichProvider, fetchPayers, runPool, searchProviders } from './api'
 import { ProviderCard } from './components/ProviderCard'
-import { type RankContext, type Ranking, rankProviders } from './rank'
+import { rankProviders } from './rank'
 import type { AgeGroup, EnrichState, Findings, Provider } from './types'
 
 const RADII_MI = [2, 5, 10, 15]
-// Payers come from the backend because the agent normalizes plan names to that exact list.
-// Languages are only matched loosely here in the browser, so the list can live locally.
-const LANGUAGES = [
-  'Spanish',
-  'Korean',
-  'Mandarin',
-  'Cantonese',
-  'Armenian',
-  'Tagalog',
-  'Vietnamese',
-  'Farsi',
-  'Russian',
-  'Japanese',
-  'Arabic',
-  'Hindi',
-]
 // Research starts for at most this many cards at once. Cards still queued never start when the
 // navigator runs a new search, so abandoned results don't cost Claude calls. The backend has its
 // own limit across all navigators.
 const ENRICH_CONCURRENCY = 4
 
-const EMPTY_RANKING: Ranking = { ranked: [], notPrimaryCare: [] }
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong'
+}
+
+/**
+ * Applies a state update that may reorder the list inside a view transition, so cards glide to
+ * their new rank instead of jumping. Browsers without the API just apply the update.
+ */
+function animateReorder(update: () => void) {
+  if (!('startViewTransition' in document)) {
+    update()
+    return
+  }
+  document.startViewTransition(() => flushSync(update))
 }
 
 export default function App() {
@@ -37,14 +32,12 @@ export default function App() {
   const [radiusMi, setRadiusMi] = useState(5)
   const [ageGroup, setAgeGroup] = useState<AgeGroup>('adult')
   const [plan, setPlan] = useState('')
-  const [language, setLanguage] = useState('')
   const [payers, setPayers] = useState<string[]>([])
 
   const [providers, setProviders] = useState<Provider[]>([])
+  const [searchedZip, setSearchedZip] = useState('')
   const [searchedRadiusMi, setSearchedRadiusMi] = useState(5)
   const [enrichById, setEnrichById] = useState<Record<string, EnrichState>>({})
-  const [ranking, setRanking] = useState<Ranking>(EMPTY_RANKING)
-  const [rankingStale, setRankingStale] = useState(false)
   const [showNotPrimaryCare, setShowNotPrimaryCare] = useState(false)
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -57,30 +50,25 @@ export default function App() {
   }, [])
 
   const providerById = useMemo(() => new Map(providers.map((p) => [p.place_id, p])), [providers])
-  const findingsById = useMemo(() => {
-    const result: Record<string, Findings> = {}
+  // Derived rather than stored, so the list re-ranks by itself as details arrive or the plan changes.
+  const ranking = useMemo(() => {
+    const findingsById: Record<string, Findings> = {}
     for (const [id, state] of Object.entries(enrichById)) {
-      if (state.status === 'done') result[id] = state.data.findings
+      if (state.status === 'done') findingsById[id] = state.findings
     }
-    return result
-  }, [enrichById])
-  const loadedCount = Object.values(enrichById).filter((s) => s.status === 'done').length
+    return rankProviders(providers, findingsById, { radiusMi: searchedRadiusMi, plan })
+  }, [providers, enrichById, searchedRadiusMi, plan])
 
-  function rerank(overrides: Partial<RankContext> = {}) {
-    setRanking(rankProviders(providers, findingsById, { radiusMi: searchedRadiusMi, plan, language, ...overrides }))
-    setRankingStale(false)
-  }
-
-  async function enrichOne(provider: Provider, generation: number, refresh = false) {
+  async function enrichOne(provider: Provider, generation: number) {
     const isStale = () => generation !== searchGeneration.current
     if (isStale()) return
     setEnrichById((prev) => ({ ...prev, [provider.place_id]: { status: 'running' } }))
     try {
-      const data = await enrichProvider(provider, { refresh, isCancelled: isStale })
-      if (!data || isStale()) return
-      setEnrichById((prev) => ({ ...prev, [provider.place_id]: { status: 'done', data } }))
-      // Don't reorder cards under the navigator; offer a re-rank instead.
-      setRankingStale(true)
+      const findings = await enrichProvider(provider, isStale)
+      if (!findings || isStale()) return
+      animateReorder(() =>
+        setEnrichById((prev) => ({ ...prev, [provider.place_id]: { status: 'done', findings } })),
+      )
     } catch (err) {
       if (isStale()) return
       setEnrichById((prev) => ({ ...prev, [provider.place_id]: { status: 'error', message: errorMessage(err) } }))
@@ -94,19 +82,18 @@ export default function App() {
     setError(null)
     setProviders([])
     setEnrichById({})
-    setRanking(EMPTY_RANKING)
-    setRankingStale(false)
     setShowNotPrimaryCare(false)
 
     try {
       const result = await searchProviders(zip, radiusMi, ageGroup)
       if (generation !== searchGeneration.current) return
-      const initial = rankProviders(result.providers, {}, { radiusMi, plan, language })
       setProviders(result.providers)
+      setSearchedZip(zip)
       setSearchedRadiusMi(radiusMi)
-      setRanking(initial)
       setSearching(false)
 
+      // Research in the initial rank order, so the likeliest picks fill in first.
+      const initial = rankProviders(result.providers, {}, { radiusMi, plan })
       const byId = new Map(result.providers.map((p) => [p.place_id, p]))
       const inRankOrder = initial.ranked.map((id) => byId.get(id)!)
       await runPool(inRankOrder, ENRICH_CONCURRENCY, (p) => enrichOne(p, generation))
@@ -121,38 +108,32 @@ export default function App() {
     const provider = providerById.get(id)
     if (!provider) return null
     return (
-      <li key={id}>
+      <li key={id} style={{ viewTransitionName: `card-${id}` }}>
         <ProviderCard
           provider={provider}
           rank={rank}
           state={enrichById[id]}
           plan={plan}
-          language={language}
-          onRefresh={() => enrichOne(provider, searchGeneration.current, true)}
+          onRetry={() => enrichOne(provider, searchGeneration.current)}
         />
       </li>
     )
   }
 
   const inputClass =
-    'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-teal-600 focus:ring-1 focus:ring-teal-600 focus:outline-none'
+    'w-full rounded-md border border-navy/20 bg-white px-3 py-2 text-sm text-navy focus:border-coral focus:ring-2 focus:ring-coral/40 focus:outline-none'
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-5xl px-4 py-4">
+    <div className="min-h-screen bg-white text-navy">
+      <header className="bg-navy text-white">
+        <div className="mx-auto max-w-5xl px-4 py-5">
           <h1 className="text-xl font-semibold">PCP Finder</h1>
-          <p className="text-sm text-slate-500">
-            Nearby primary care providers in Los Angeles County, with insurance, availability and sources.
-          </p>
+          <p className="text-sm text-white/70">Nearby primary care providers in Los Angeles County</p>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-6">
-        <form
-          onSubmit={onSearch}
-          className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-6"
-        >
+        <form onSubmit={onSearch} className="grid gap-3 rounded-xl bg-sky p-4 sm:grid-cols-2 lg:grid-cols-5">
           <Field label="Patient ZIP">
             <input
               className={inputClass}
@@ -184,8 +165,8 @@ export default function App() {
               className={inputClass}
               value={plan}
               onChange={(e) => {
-                setPlan(e.target.value)
-                rerank({ plan: e.target.value })
+                const value = e.target.value
+                animateReorder(() => setPlan(value))
               }}
             >
               <option value="">Any</option>
@@ -196,50 +177,25 @@ export default function App() {
               ))}
             </select>
           </Field>
-          <Field label="Language">
-            <select
-              className={inputClass}
-              value={language}
-              onChange={(e) => {
-                setLanguage(e.target.value)
-                rerank({ language: e.target.value })
-              }}
-            >
-              <option value="">Any</option>
-              {LANGUAGES.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </Field>
           <div className="flex items-end">
             <button
               type="submit"
               disabled={searching}
-              className="w-full rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+              className="w-full rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white hover:bg-navy/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral disabled:opacity-60"
             >
               {searching ? 'Searching…' : 'Find providers'}
             </button>
           </div>
         </form>
 
-        {error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {error && <p className="mt-4 rounded-md border-l-4 border-coral bg-sky p-3 text-sm">{error}</p>}
 
         {providers.length > 0 && (
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
-            <span>
-              {ranking.ranked.length} providers · details loaded for {loadedCount} of {providers.length}
-            </span>
-            {rankingStale && (
-              <button
-                type="button"
-                onClick={() => rerank()}
-                className="rounded-md bg-amber-100 px-3 py-1.5 font-medium text-amber-900 hover:bg-amber-200"
-              >
-                New details loaded · re-rank
-              </button>
-            )}
+          <div className="mt-6 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="font-semibold">
+              {ranking.ranked.length} providers near {searchedZip}
+            </h2>
+            <p className="text-xs text-navy/70">Business info and ratings from Google Maps</p>
           </div>
         )}
 
@@ -250,7 +206,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShowNotPrimaryCare((v) => !v)}
-              className="text-sm font-medium text-slate-600 hover:text-slate-900"
+              className="text-sm font-medium text-navy/70 hover:text-navy"
             >
               {showNotPrimaryCare ? '▾' : '▸'} Likely not primary care ({ranking.notPrimaryCare.length})
             </button>
@@ -267,7 +223,7 @@ export default function App() {
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-slate-600">{label}</span>
+      <span className="mb-1 block text-xs font-medium text-navy/70">{label}</span>
       {children}
     </label>
   )

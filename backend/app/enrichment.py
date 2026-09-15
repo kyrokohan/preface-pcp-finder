@@ -1,6 +1,6 @@
 """Background research jobs, one per practice.
 
-Research typically takes 20-30 s (120 s timeout), too long to hold one HTTP request open
+Research typically takes 20-50 s (120 s timeout), too long to hold one HTTP request open
 through hosting proxies, so the browser starts a job and polls for the result. Jobs are keyed
 by place ID, so repeated or concurrent requests for the same practice share one run.
 """
@@ -23,7 +23,6 @@ class EnrichStatus(BaseModel):
     place_id: str
     status: Literal["running", "done", "error", "not_started"]
     findings: Findings | None = None
-    as_of: float | None = None
     error: str | None = None
 
 
@@ -45,13 +44,13 @@ class EnrichmentJobs:
         self._running: dict[str, asyncio.Task[None]] = {}
         self._errors: dict[str, str] = {}
 
-    def start(self, practice: agent.PracticeInput, refresh: bool) -> EnrichStatus:
+    def start(self, practice: agent.PracticeInput) -> EnrichStatus:
         place_id = practice.place_id
         if place_id not in self._running:
+            # Starting again after a failure is the retry, so the old error is dropped.
             self._errors.pop(place_id, None)
-            profile = None if refresh else self._load_profile(place_id)
-            if profile is not None:
-                return self._done(place_id, profile)
+            if (findings := self._load_profile(place_id)) is not None:
+                return EnrichStatus(place_id=place_id, status="done", findings=findings)
             self._running[place_id] = asyncio.create_task(self._run(practice))
         return EnrichStatus(place_id=place_id, status="running")
 
@@ -60,8 +59,8 @@ class EnrichmentJobs:
             return EnrichStatus(place_id=place_id, status="running")
         if place_id in self._errors:
             return EnrichStatus(place_id=place_id, status="error", error=self._errors[place_id])
-        if (profile := self._load_profile(place_id)) is not None:
-            return self._done(place_id, profile)
+        if (findings := self._load_profile(place_id)) is not None:
+            return EnrichStatus(place_id=place_id, status="done", findings=findings)
         # Nothing known, e.g. a redeploy cleared in-memory jobs mid-poll; the UI offers a retry.
         return EnrichStatus(place_id=place_id, status="not_started")
 
@@ -72,21 +71,15 @@ class EnrichmentJobs:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _load_profile(self, place_id: str) -> tuple[Findings, float] | None:
-        hit = self._store.get(place_id, self._max_age_s)
-        if hit is None:
+    def _load_profile(self, place_id: str) -> Findings | None:
+        saved = self._store.get(place_id, self._max_age_s)
+        if saved is None:
             return None
-        findings, as_of = hit
         try:
-            return Findings.model_validate(findings), as_of
+            return Findings.model_validate(saved)
         except ValidationError:
             # Saved under an older Findings schema: treat as missing so it's researched again.
             return None
-
-    @staticmethod
-    def _done(place_id: str, profile: tuple[Findings, float]) -> EnrichStatus:
-        findings, as_of = profile
-        return EnrichStatus(place_id=place_id, status="done", findings=findings, as_of=as_of)
 
     async def _run(self, practice: agent.PracticeInput) -> None:
         place_id = practice.place_id

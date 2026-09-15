@@ -22,13 +22,13 @@ class ProfileStore:
         )
         self._conn.commit()
 
-    def get(self, place_id: str, max_age_s: float) -> tuple[dict, float] | None:
+    def get(self, place_id: str, max_age_s: float) -> dict | None:
         row = self._conn.execute(
             "SELECT findings_json, updated_at FROM profiles WHERE place_id = ?", (place_id,)
         ).fetchone()
         if row is None or time.time() - row[1] > max_age_s:
             return None
-        return json.loads(row[0]), row[1]
+        return json.loads(row[0])
 
     def put(self, place_id: str, findings: dict) -> None:
         self._conn.execute(

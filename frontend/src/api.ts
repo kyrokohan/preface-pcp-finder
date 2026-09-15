@@ -1,6 +1,6 @@
-import type { AgeGroup, EnrichResult, EnrichStatus, Provider, SearchResponse } from './types'
+import type { AgeGroup, EnrichStatus, Findings, Provider, SearchResponse } from './types'
 
-// Research typically takes 20-30 s, too long for one request through hosting proxies, so the
+// Research typically takes 20-50 s, too long for one request through hosting proxies, so the
 // backend runs it as a job and the browser polls.
 const POLL_INTERVAL_MS = 3000
 
@@ -29,27 +29,15 @@ export function searchProviders(zip: string, radiusMi: number, ageGroup: AgeGrou
 }
 
 /** Starts (or joins) research for a practice and polls until it finishes. Returns null if cancelled. */
-export async function enrichProvider(
-  provider: Provider,
-  { refresh = false, isCancelled = () => false }: { refresh?: boolean; isCancelled?: () => boolean } = {},
-): Promise<EnrichResult | null> {
+export async function enrichProvider(provider: Provider, isCancelled: () => boolean): Promise<Findings | null> {
   const { place_id, name, address, phone, website, types } = provider
-  let status = await postJson<EnrichStatus>(`/api/enrich${refresh ? '?refresh=true' : ''}`, {
-    place_id,
-    name,
-    address,
-    phone,
-    website,
-    types,
-  })
+  let status = await postJson<EnrichStatus>('/api/enrich', { place_id, name, address, phone, website, types })
   while (status.status === 'running') {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
     if (isCancelled()) return null
     status = await request<EnrichStatus>(`/api/enrich/${encodeURIComponent(place_id)}`)
   }
-  if (status.status === 'done' && status.findings && status.as_of !== null) {
-    return { findings: status.findings, as_of: status.as_of }
-  }
+  if (status.status === 'done' && status.findings) return status.findings
   throw new Error(status.error ?? 'Research was interrupted, please retry')
 }
 
