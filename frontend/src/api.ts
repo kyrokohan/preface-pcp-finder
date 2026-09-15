@@ -30,8 +30,8 @@ export function searchProviders(zip: string, radiusMi: number, ageGroup: AgeGrou
 
 /** Starts (or joins) research for a practice and polls until it finishes. Returns null if cancelled. */
 export async function enrichProvider(provider: Provider, isCancelled: () => boolean): Promise<Findings | null> {
-  const { place_id, name, address, phone, website, types } = provider
-  let status = await postJson<EnrichStatus>('/api/enrich', { place_id, name, address, phone, website, types })
+  const { place_id, name, address, phone, website, types, hours } = provider
+  let status = await postJson<EnrichStatus>('/api/enrich', { place_id, name, address, phone, website, types, hours })
   while (status.status === 'running') {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
     if (isCancelled()) return null

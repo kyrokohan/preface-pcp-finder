@@ -25,6 +25,19 @@ def test_partial_submission_leaves_unknown_facts_null():
     assert findings.insurance_plans == []
 
 
+def test_values_without_a_quote_never_reach_the_navigator():
+    findings = Findings.model_validate(
+        {
+            "accepting_new_patients": {"value": True, "source_url": "https://example.com"},
+            "insurance_plans": [{"name": "Aetna", "quote": "We accept Aetna"}, {"name": "Cigna"}],
+            "years_in_business": {"since_year": 1990, "basis": "practice_founded"},
+        }
+    )
+    assert findings.accepting_new_patients.value is None
+    assert [plan.name for plan in findings.insurance_plans] == ["Aetna"]
+    assert findings.years_in_business.since_year is None
+
+
 def test_sourced_models_list_the_value_before_its_evidence():
     # The agent reads this schema; with the evidence fields first it misplaced "value" (models.py).
     definitions = Findings.model_json_schema()["$defs"]
